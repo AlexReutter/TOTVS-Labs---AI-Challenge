@@ -1,0 +1,185 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo = FALSE}
+library(knitr)
+opts_chunk$set(message = FALSE, warning = FALSE, cache = TRUE,
+               cache.path = "README-cache/",
+               fig.path = "README-fig/")
+```
+
+## TOTVS Labs - AI Challenge
+
+This repository analyzes a dataset for the [TOTVS Lead Data Scientist](https://github.com/TOTVS/MDMStatic/tree/master/code-challenge) position, using R.
+
+### Parse and extract the data.
+
+The dataset contains transactions from a restaurant.  The file appears to be in JSON format.
+
+A potential challenge in reading this data from JSON is that each bill can have multiple items on it.  The fromJSON() function of the jsonlite package reads in the file as nested dataframes.  
+``` {r}
+library(jsonlite)
+df <- fromJSON("sample.txt")
+dim(df)
+names(df)
+```
+
+The total on the bill, for example, is df$complemento$valorTotal
+``` {r}
+head(df$complemento$valorTotal)
+```
+
+This is a bit of a pain to work with, but we can flatten the data frame:
+``` {r}
+dfflat <- flatten(df, recursive = TRUE)
+names(dfflat)
+```
+
+The values of the dets column are lists of data frames; the items on the first bill, for example, are
+```{r}
+df$dets[[1]]
+```
+
+versaoDocumento is also, somewhat oddly, I thought, a list of data frames, but appears to have all 1 values
+```{r}
+summary(as.numeric(matrix(unlist(dfflat$versaoDocumento),ncol=1,byrow = TRUE)[,1]))
+```
+
+A quick summary of the other numeric columns shows that several columns are constant and can be dropped from further analysis.  total.icmsTot.vProd is nearly identical to valorTotal, so we'll drop that, too.
+```{r}
+summary(dfflat[3:30])
+```
+
+The following text columns, with the exception of infAdic.infCpl, which appears to be the table number at which the customers are seated, are also constant, and can be dropped from analysis.
+```{r}
+table(dfflat$emit.cnpj)
+table(dfflat$emit.xFant)
+table(dfflat$emit.enderEmit.fone)
+table(dfflat$emit.enderEmit.xBairro)
+table(dfflat$emit.enderEmit.xLgr)
+table(dfflat$emit.enderEmit.xMun)
+table(dfflat$emit.enderEmit.xPais)
+table(dfflat$emit.enderEmit.uf)
+table(dfflat$ide.natOp)
+table(dfflat$infAdic.infCpl)
+```
+
+
+After dropping the constant columns, we're left with  
+```{r}
+drops <- c("versaoDocumento", "total.icmsTot.vFrete", "total.icmsTot.vOutro", "total.icmsTot.vSeg", "total.icmsTot.vbc", "total.icmsTot.vbcst", "total.icmsTot.vcofins", "total.icmsTot.vicms", "total.icmsTot.vicmsDeson", "total.icmsTot.vii", "total.icmsTot.vipi", "total.icmsTot.vpis", "total.icmsTot.vst", "emit.cnpj", "emit.xFant", "emit.enderEmit.fone", "emit.enderEmit.xBairro", "emit.enderEmit.xLgr", "emit.enderEmit.xMun", "emit.enderEmit.xPais", "emit.enderEmit.uf","ide.natOp", "total.icmsTot.vProd")
+dfready <- dfflat[ , !(names(dfflat) %in% drops)]
+summary(dfready[2:7])
+```
+...plus the contents of dets.
+
+
+
+### Identify a pattern on any set of fields that can help predict how much a customer will spend.
+
+Does the table at which a person is seated have any effect on their spending?  
+```{r}
+mod1 = lm(complemento.valorTotal ~ infAdic.infCpl, data = dfready)
+anova(mod1)
+```
+...No.  The p-value for this variable in the model is nowhere near statistically significant.
+
+vDesc, vtotTrib, and vnf all appear to be highly correlated with the final bill, as indicated by their highly statistically significant p-values:
+```{r}
+mod2 = lm(complemento.valorTotal ~ total.icmsTot.vDesc + total.icmsTot.vTotTrib + total.icmsTot.vnf, data = dfready)
+anova(mod2)
+```
+...but I have no idea what these columns represent.  They aren't exactly components of the final bill, otherwise, their sum would equal the value of the final bill
+```{r}
+plot(dfready$complemento.valorTotal,dfready$total.icmsTot.vDesc+dfready$total.icmsTot.vTotTrib+dfready$total.icmsTot.vnf)
+summary(dfready$complemento.valorTotal-dfready$total.icmsTot.vDesc-dfready$total.icmsTot.vTotTrib-dfready$total.icmsTot.vnf)
+```
+Sometimes it's higher, sometimes it's lower, so without further information, I don't feel comfortable using these to predict spending.
+
+
+There's a similar issue with the dets information:
+```{r}
+df$dets[[1]]
+```
+This has detailed information on each item in the order; with this information, you can perfectly predict the amount of the bill because the bill is just the sum of prod.vProd.  We can't use this to "predict" customer spending; perhaps ideally, we would build a model to predict what a customer will buy based on other variables, but all we have in the way of predictors at this point are the time-based ones, and I don't have enough time to do a market basket analysis in R. 
+
+Okay, given that we're just left with date-time information as possibly useful, let's create some time-based columns we can use for prediction.
+```{r}
+library(chron)
+dfready$hrs <- hours(strptime(dfready$`ide.dhEmi.$date`, "%Y-%m-%dT%H:%M:%S.000Z"))
+dfready$weekdays <- weekdays(strptime(dfready$`ide.dhEmi.$date`, "%Y-%m-%dT%H:%M:%S.000Z"))
+dfready$days <- days(strptime(dfflat$`ide.dhEmi.$date`, "%Y-%m-%dT%H:%M:%S.000Z"))
+dfready$week <- floor((as.numeric(dfready$days)-4)/7)+1
+```
+
+Now let's look at spending by hour of the day
+```{r}
+plot(factor(dfready$hrs),dfready$complemento.valorTotal)
+```
+
+...hm... I don't like the outlying values. Let's look at the log-transformed response:
+
+```{r}
+plot(factor(dfready$hrs),log(dfready$complemento.valorTotal))
+```
+
+That's better, but looking at a table of the hourly information by weekday:
+
+```{r}
+library(data.table)
+dt <- data.table(dfready)
+dt[order(weekdays,hrs),list(mean=mean(complemento.valorTotal),sd=sd(complemento.valorTotal)),by=list(hrs,weekdays)]
+```
+I'm not crazy about the prospect of trying to use hourly information to predict customer spending when there are so few cases to work with.  It might be simpler to simply bin the hours into the lunch and dinner servings.  From this table, also note that the restaurant does not appear to open for dinner on Fridays and Saturdays.
+
+```{r}
+dfready$serving <- floor(dfready$hrs/16)
+plot(factor(dfready$serving),log(dfready$complemento.valorTotal))
+```
+
+Customers tend to spend more at dinner than at lunch.  Simple, easy to understand, and makes sense.  All right, let's look at the other time variables.
+
+```{r}
+plot(dfready$days,log(dfready$complemento.valorTotal))
+```
+
+Hunh.  So spending tends to increase from Monday through Wednesday, then decrease on Thursday and Friday, and increase again on Saturday.  Let's take a look at a summary table that also breaks down spending by week.
+
+```{r}
+library(data.table)
+dt <- data.table(dfready)
+dt[order(week,weekdays,serving),list(mean=mean(log(complemento.valorTotal)),sd=sd(log(complemento.valorTotal)),mean=mean(complemento.valorTotal),sd=sd(complemento.valorTotal)),by=list(serving,weekdays,week)]
+```
+(Curse R for not understanding how to sort days of the week!)  Without the time to be more clever about the sorting, this is fine.  Some interesting things to note:
+* Thursday dinner servings didn't begin until the third week, which explains the bump in overall average spending on Thursdays that week.
+* Saturday spending is very high, relative to other lunchtime servings.  Is it a special brunch or something?
+* Likewise, the Wednesday dinnertime serving is higher than than other dinnertime servings.
+
+In a model for prediction, let's try:
+```{r}
+mod5 = lm(log(complemento.valorTotal) ~ factor(serving) + factor(weekdays) + factor(week), data = dfready)
+anova(mod5)
+mod5
+```
+The week effect is not statistically significant, so I wouldn't expect the customer spending to change from week 3 to 4.  For predicting how much a customer will spend, you could plug into the linear regression, or simply use the following table.
+
+```{r}
+dt[order(weekdays,serving),list(mean=mean(complemento.valorTotal)),by=list(serving,weekdays)]
+```
+
+
+### Calculate a sales forecast for the next week.
+
+Calculating the sales forecast for next week would normally involve building a time series model that incorporates the weekly seasonality of sales; however, with just 17 time points, it's difficult to say much:
+```{r}
+dt[,list(sum=sum(complemento.valorTotal)),by=days]
+dailySales <- ts(dt[,list(sum=sum(complemento.valorTotal)),by=days]$sum,frequency=6)
+fc1 <- auto.arima(dailySales, max.p=6, max.q=6)
+fc1
+forecast(fc1,6)
+plot(forecast(fc1,6))
+```
+
+The forecast results from the auto.arima model aren't too bad.  It follows the general shape of the first three weeks, while smoothing out the week-to-week variation.  The model has no autoregressive or moving average components, but does have one level of seasonal differencing to account for the seasonality in the data.
+

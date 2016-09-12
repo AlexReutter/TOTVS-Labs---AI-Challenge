@@ -1,0 +1,17 @@
+{
+    "contents" : "\n# knit the README\nlibrary(knitr)\nknit(\"README.Rmd\")\n\n",
+    "created" : 1473557504047.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1823299488",
+    "id" : "2FA363DC",
+    "lastKnownWriteTime" : 1473557520,
+    "path" : "C:/Users/IBM_ADMIN/Downloads/GitHub/TOTVS Labs - AI Challenge/analysis.R",
+    "project_path" : "analysis.R",
+    "properties" : {
+    },
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "type" : "r_source"
+}
